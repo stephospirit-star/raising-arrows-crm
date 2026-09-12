@@ -509,6 +509,13 @@ class Handler(BaseHTTPRequestHandler):
             amount_total = float(body.get("amount_total") or 0)
         # "Closed – Paid in Full" means paid in full, by definition.
         amount_paid = amount_total if stage == "closed_paid_full" else float(body.get("amount_paid") or 0)
+        personalized_months = body.get("personalized_months")
+        if program_type == "personalized" and personalized_months:
+            # Personalized coaching pays in 30-day installments, one per
+            # month agreed — e.g. 3 months means 3 expected payments.
+            installments_total = int(personalized_months)
+        else:
+            installments_total = int(body.get("installments_total") or settings["installments_total_default"])
         cur = conn.execute(
             """INSERT INTO contacts
                (name, email, phone, stage, hot, program_type, price_per_child,
@@ -526,8 +533,8 @@ class Handler(BaseHTTPRequestHandler):
                 price_per_child,
                 amount_total,
                 amount_paid,
-                body.get("personalized_months"),
-                int(body.get("installments_total") or settings["installments_total_default"]),
+                personalized_months,
+                installments_total,
                 int(body.get("installments_paid") or 0),
                 body.get("follow_up_due"),
                 body.get("next_payment_due"),
@@ -603,6 +610,12 @@ class Handler(BaseHTTPRequestHandler):
         elif "amount_paid" in body:
             updates["amount_paid"] = float(body["amount_paid"] or 0)
 
+        final_personalized_months = updates.get("personalized_months", row["personalized_months"])
+        if final_program_type == "personalized" and final_personalized_months:
+            # Personalized coaching pays in 30-day installments, one per
+            # month agreed — e.g. 3 months means 3 expected payments.
+            updates["installments_total"] = int(final_personalized_months)
+
         if updates:
             updates["updated_at"] = datetime.utcnow().isoformat()
             set_clause = ", ".join(f"{k} = ?" for k in updates)
@@ -649,21 +662,40 @@ class Handler(BaseHTTPRequestHandler):
         settings = get_settings(conn)
         amount = float(body.get("amount") or 0)
         new_paid = row["amount_paid"] + amount
-        new_installments_paid = row["installments_paid"] + (
-            1 if body.get("advance_installment", True) else 0
-        )
-        next_due = row["next_payment_due"]
-        if body.get("advance_installment", True):
-            gap = int(settings.get("installment_gap_days", 30))
-            base = parse_date(next_due) or date.today()
-            if new_installments_paid < row["installments_total"]:
-                next_due = (base + timedelta(days=gap)).isoformat()
-            else:
-                next_due = None
+
+        # Receiving a payment is what closes a deal — figure out where it
+        # lands. Personalized coaching always closes to Personalized
+        # Coaching; RAFA (the 3-month program) closes Paid in Full when the
+        # full amount is in, otherwise Payment Plan.
+        new_stage = row["stage"]
+        if row["program_type"] == "personalized" and row["stage"] != "closed_personalized":
+            new_stage = "closed_personalized"
+        elif row["program_type"] == "regular" and row["stage"] != "closed_paid_full":
+            total = row["amount_total"] or 0
+            new_stage = "closed_paid_full" if total > 0 and new_paid >= total else "closed_payment_plan"
+
+        if new_stage == "closed_paid_full":
+            new_paid = row["amount_total"]
+            new_installments_paid = row["installments_total"]
+            next_due = None
+        else:
+            new_installments_paid = row["installments_paid"] + (
+                1 if body.get("advance_installment", True) else 0
+            )
+            next_due = row["next_payment_due"]
+            if body.get("advance_installment", True):
+                # Always 30 days from the day the payment is actually
+                # recorded — she can still hand-pick a different date after.
+                gap = int(settings.get("installment_gap_days", 30))
+                if new_installments_paid < row["installments_total"]:
+                    next_due = (date.today() + timedelta(days=gap)).isoformat()
+                else:
+                    next_due = None
+
         conn.execute(
             """UPDATE contacts SET amount_paid = ?, installments_paid = ?,
-               next_payment_due = ?, updated_at = ? WHERE id = ?""",
-            (new_paid, new_installments_paid, next_due, datetime.utcnow().isoformat(), cid),
+               next_payment_due = ?, stage = ?, updated_at = ? WHERE id = ?""",
+            (new_paid, new_installments_paid, next_due, new_stage, datetime.utcnow().isoformat(), cid),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM contacts WHERE id = ?", (cid,)).fetchone()
@@ -703,10 +735,16 @@ class Handler(BaseHTTPRequestHandler):
         payment_window = int(settings.get("payment_due_window_days", 2))
         today = date.today()
 
+        # Once someone is on a payment plan, we chase the payment date, not a
+        # generic "follow up" — that stage is excluded from this list.
         follow_ups_due = []
         for c in contacts:
             d = parse_date(c.get("follow_up_due"))
-            if d and c["stage"] != "closed_lost" and d <= today + timedelta(days=follow_up_window):
+            if (
+                d
+                and c["stage"] not in ("closed_lost", "closed_payment_plan")
+                and d <= today + timedelta(days=follow_up_window)
+            ):
                 follow_ups_due.append(
                     {
                         "id": c["id"],
@@ -724,7 +762,7 @@ class Handler(BaseHTTPRequestHandler):
             d = parse_date(c.get("next_payment_due"))
             if (
                 d
-                and c["stage"] == "closed_payment_plan"
+                and c["stage"] in ("closed_payment_plan", "closed_personalized")
                 and c["installments_paid"] < c["installments_total"]
                 and d <= today + timedelta(days=payment_window)
             ):
@@ -746,6 +784,37 @@ class Handler(BaseHTTPRequestHandler):
             if c["payment_not_recorded"]
         ]
 
+        outstanding_payments = []
+        for c in contacts:
+            if c["stage"] in ("closed_lost", "closed_paid_full"):
+                continue
+            remaining = (c["amount_total"] or 0) - (c["amount_paid"] or 0)
+            if remaining > 0:
+                outstanding_payments.append(
+                    {
+                        "id": c["id"],
+                        "name": c["name"],
+                        "phone": c["phone"],
+                        "stage": c["stage"],
+                        "amount_remaining": remaining,
+                    }
+                )
+        outstanding_payments.sort(key=lambda x: x["amount_remaining"], reverse=True)
+
+        received_payments = [
+            {
+                "id": c["id"],
+                "name": c["name"],
+                "phone": c["phone"],
+                "stage": c["stage"],
+                "amount_paid": c["amount_paid"] or 0,
+                "amount_total": c["amount_total"] or 0,
+            }
+            for c in contacts
+            if (c["amount_paid"] or 0) > 0
+        ]
+        received_payments.sort(key=lambda x: x["amount_paid"], reverse=True)
+
         self._send_json(
             {
                 "stage_counts": stage_counts,
@@ -755,6 +824,8 @@ class Handler(BaseHTTPRequestHandler):
                 "follow_ups_due": follow_ups_due,
                 "payments_due": payments_due,
                 "unrecorded_payments": unrecorded_payments,
+                "outstanding_payments": outstanding_payments,
+                "received_payments": received_payments,
             }
         )
 

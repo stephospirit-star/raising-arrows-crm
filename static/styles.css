@@ -207,6 +207,9 @@ main { padding: 20px; }
 }
 .kpi-value { font-size: 22px; font-weight: 700; }
 .kpi-label { font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
+.kpi-clickable { cursor: pointer; }
+.kpi-clickable:hover { border-color: var(--accent); }
+.kpi-clickable .kpi-label { text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; }
 
 .due-lists { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
 .due-card {

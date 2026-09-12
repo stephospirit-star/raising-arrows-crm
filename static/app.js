@@ -216,7 +216,7 @@ function renderCard(c) {
     ${money}
     ${c.payment_not_recorded ? `<span class="badge badge-overdue">⚠️ Payment not recorded</span>` : ""}
     ${dueBadge(c.follow_up_due, "follow")}
-    ${c.stage === "closed_payment_plan" ? dueBadge(c.next_payment_due, "payment") : ""}
+    ${["closed_payment_plan", "closed_personalized"].includes(c.stage) ? dueBadge(c.next_payment_due, "payment") : ""}
     <select class="card-move-select">${moveStageOptions(c.stage)}</select>
   `;
 
@@ -313,7 +313,7 @@ function openContactModal(id) {
       <div class="form-row">
         <label>Program type</label>
         <select id="f-program-type">
-          <option value="regular" ${c.program_type === "regular" ? "selected" : ""}>3-month program</option>
+          <option value="regular" ${c.program_type === "regular" ? "selected" : ""}>RAFA (3-month program)</option>
           <option value="personalized" ${c.program_type === "personalized" ? "selected" : ""}>Personalized coaching</option>
         </select>
       </div>
@@ -325,8 +325,10 @@ function openContactModal(id) {
 
     <div id="regular-pricing-block" style="${c.program_type === "regular" ? "" : "display:none"}">
       <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 10px;">
-        3-month program is ${fmtMoney(state.settings.price_per_child)} per child — the total
-        below is calculated automatically from the children listed above.
+        RAFA is ${fmtMoney(state.settings.price_per_child)} per child — the total
+        below is calculated automatically from the children listed above. Paying
+        the full amount at once moves this card to Closed – Paid in Full;
+        paying part of it moves it to Closed – Payment Plan.
       </p>
       <div class="form-row">
         <label>Total amount owed (₦)</label>
@@ -334,6 +336,11 @@ function openContactModal(id) {
       </div>
     </div>
     <div id="personalized-pricing-block" style="${c.program_type === "personalized" ? "" : "display:none"}">
+      <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 10px;">
+        Priced by hand — enter the total you agreed on. Recording the first
+        payment moves this card to Closed – Personalized Coaching automatically;
+        payments are tracked roughly every 30 days after that.
+      </p>
       <div class="form-row">
         <label>Total amount agreed (₦)</label>
         <input type="number" id="f-amount-total" value="${c.amount_total ?? 0}">
@@ -356,11 +363,10 @@ function openContactModal(id) {
           <label>Amount received (₦)</label>
           <input type="number" id="f-payment-amount" placeholder="e.g. 30000">
         </div>
-        ${c.stage === "closed_payment_plan" ? `
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:10px;">
           <input type="checkbox" id="f-advance-installment" style="width:auto;" checked>
-          Advance next payment due date by ${state.settings.installment_gap_days || 30} days
-        </label>` : ""}
+          Set next payment due ${state.settings.installment_gap_days || 30} days from today
+        </label>
         <button class="btn btn-primary btn-small" id="confirm-payment-btn" type="button">Add payment</button>
         <button class="btn btn-small" id="cancel-payment-btn" type="button">Cancel</button>
       </div>` : ""}
@@ -369,15 +375,18 @@ function openContactModal(id) {
 
     <div class="section-title">Dates</div>
     <div class="form-grid">
-      <div class="form-row">
+      <div class="form-row" id="followup-row" style="${c.stage === "closed_payment_plan" ? "display:none" : ""}">
         <label>Follow-up due</label>
         <input type="date" id="f-followup" value="${c.follow_up_due || ""}">
       </div>
-      <div class="form-row" id="next-payment-row" style="${c.stage === "closed_payment_plan" ? "" : "display:none"}">
+      <div class="form-row" id="next-payment-row" style="${["closed_payment_plan", "closed_personalized"].includes(c.stage) ? "" : "display:none"}">
         <label>Next payment due</label>
         <input type="date" id="f-next-payment" value="${c.next_payment_due || ""}">
       </div>
     </div>
+    <p id="payment-plan-note" style="font-size:12px;color:var(--ink-soft);margin:-8px 0 10px;${c.stage === "closed_payment_plan" ? "" : "display:none"}">
+      No follow-up needed once someone is on a payment plan — we track the next payment date instead.
+    </p>
 
     <div class="form-row" id="lost-reason-row" style="${c.stage === "closed_lost" ? "" : "display:none"}">
       <label>Reason lost</label>
@@ -424,8 +433,12 @@ function openContactModal(id) {
     document.getElementById("personalized-pricing-block").style.display = isPersonalized ? "" : "none";
   });
   document.getElementById("f-stage").addEventListener("change", (e) => {
-    document.getElementById("next-payment-row").style.display = e.target.value === "closed_payment_plan" ? "" : "none";
-    document.getElementById("lost-reason-row").style.display = e.target.value === "closed_lost" ? "" : "none";
+    const stage = e.target.value;
+    const needsNextPayment = ["closed_payment_plan", "closed_personalized"].includes(stage);
+    document.getElementById("next-payment-row").style.display = needsNextPayment ? "" : "none";
+    document.getElementById("lost-reason-row").style.display = stage === "closed_lost" ? "" : "none";
+    document.getElementById("followup-row").style.display = stage === "closed_payment_plan" ? "none" : "";
+    document.getElementById("payment-plan-note").style.display = stage === "closed_payment_plan" ? "" : "none";
   });
 
   document.getElementById("cancel-modal-btn").addEventListener("click", closeModal);
@@ -556,17 +569,55 @@ async function saveContact(id) {
 
 // --------------------------------------------------------- Dashboard ----
 
+function toggleCard(id) {
+  const el = document.getElementById(id);
+  el.hidden = !el.hidden;
+}
+
 function renderDashboard() {
   api("/api/dashboard").then((d) => {
     const kpiRow = document.getElementById("kpi-row");
     kpiRow.innerHTML = `
-      <div class="kpi"><div class="kpi-value">${fmtMoney(d.total_received)}</div><div class="kpi-label">Total received</div></div>
-      <div class="kpi"><div class="kpi-value">${fmtMoney(d.total_outstanding)}</div><div class="kpi-label">Outstanding / pending</div></div>
+      <div class="kpi kpi-clickable" id="kpi-received"><div class="kpi-value">${fmtMoney(d.total_received)}</div><div class="kpi-label">Total received &mdash; click for who</div></div>
+      <div class="kpi kpi-clickable" id="kpi-outstanding"><div class="kpi-value">${fmtMoney(d.total_outstanding)}</div><div class="kpi-label">Outstanding / pending &mdash; click for who</div></div>
       <div class="kpi"><div class="kpi-value">${d.follow_ups_due.length}</div><div class="kpi-label">Follow-ups due</div></div>
       <div class="kpi"><div class="kpi-value">${d.payments_due.length}</div><div class="kpi-label">Payments due</div></div>
       <div class="kpi"><div class="kpi-value">${d.unrecorded_payments.length}</div><div class="kpi-label">Payments not recorded</div></div>
       <div class="kpi"><div class="kpi-value">${d.total_contacts}</div><div class="kpi-label">Total contacts</div></div>
     `;
+
+    document.getElementById("kpi-received").addEventListener("click", () => {
+      toggleCard("received-payments-card");
+    });
+    document.getElementById("kpi-outstanding").addEventListener("click", () => {
+      toggleCard("outstanding-payments-card");
+    });
+
+    const oEl = document.getElementById("outstanding-payments");
+    oEl.innerHTML = "";
+    if (d.outstanding_payments.length === 0) {
+      oEl.innerHTML = `<div class="due-empty">Nobody has an outstanding balance.</div>`;
+    }
+    d.outstanding_payments.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "due-list-item";
+      row.innerHTML = `<span>${escapeHtml(item.name)}</span><span>${fmtMoney(item.amount_remaining)} owed</span>`;
+      row.addEventListener("click", () => goToContact(item.id));
+      oEl.appendChild(row);
+    });
+
+    const rEl = document.getElementById("received-payments");
+    rEl.innerHTML = "";
+    if (d.received_payments.length === 0) {
+      rEl.innerHTML = `<div class="due-empty">No payments received yet.</div>`;
+    }
+    d.received_payments.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "due-list-item";
+      row.innerHTML = `<span>${escapeHtml(item.name)}</span><span>${fmtMoney(item.amount_paid)} paid</span>`;
+      row.addEventListener("click", () => goToContact(item.id));
+      rEl.appendChild(row);
+    });
 
     const fEl = document.getElementById("followups-due");
     fEl.innerHTML = "";

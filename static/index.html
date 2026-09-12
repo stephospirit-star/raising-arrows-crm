@@ -62,6 +62,16 @@
     <section id="view-dashboard" class="view" hidden>
       <div class="kpi-row" id="kpi-row"></div>
       <div class="due-lists">
+        <div class="due-card" id="outstanding-payments-card" hidden>
+          <h3>Outstanding — who we're expecting payment from</h3>
+          <div id="outstanding-payments" class="due-list"></div>
+        </div>
+        <div class="due-card" id="received-payments-card" hidden>
+          <h3>Received — who has already paid</h3>
+          <div id="received-payments" class="due-list"></div>
+        </div>
+      </div>
+      <div class="due-lists">
         <div class="due-card">
           <h3>Follow-ups due</h3>
           <div id="followups-due" class="due-list"></div>
@@ -84,7 +94,7 @@
     <section id="view-settings" class="view" hidden>
       <div class="settings-card">
         <h3>Pricing</h3>
-        <label>3-month program — price per child (₦)
+        <label>RAFA (3-month program) — price per child (₦)
           <input type="number" id="s-price-per-child">
         </label>
         <p style="font-size:12px;color:var(--ink-soft);margin-top:-6px;">
