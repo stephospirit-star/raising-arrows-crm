@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: raising-arrows-crm
+    env: python
+    plan: starter
+    buildCommand: "true"
+    startCommand: "python3 server.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: CRM_DATA_DIR
+        value: /var/data
+    disk:
+      name: crm-data
+      mountPath: /var/data
+      sizeGB: 1

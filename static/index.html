@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raising Arrows CRM</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="auth-screen" class="auth-screen" hidden>
+  <div class="auth-card">
+    <img src="logo.png" alt="Raising Arrows" class="auth-logo">
+    <h1>CRM</h1>
+    <div id="setup-form">
+      <p class="auth-sub">First time here — set up the login you and your assistant will both use.</p>
+      <label>Login
+        <input type="text" id="setup-email" placeholder="susan">
+      </label>
+      <label>Password
+        <input type="password" id="setup-password" placeholder="Choose a password">
+      </label>
+      <button class="btn btn-primary" id="setup-submit">Create login</button>
+      <p class="auth-error" id="setup-error"></p>
+    </div>
+    <div id="login-form" hidden>
+      <p class="auth-sub">Log in to continue.</p>
+      <label>Login
+        <input type="text" id="login-email">
+      </label>
+      <label>Password
+        <input type="password" id="login-password">
+      </label>
+      <button class="btn btn-primary" id="login-submit">Log in</button>
+      <p class="auth-error" id="login-error"></p>
+    </div>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="brand"><img src="logo.png" alt="Raising Arrows" class="brand-logo"> CRM</div>
+    <nav class="tabs">
+      <button class="tab-btn active" data-view="board">Pipeline</button>
+      <button class="tab-btn" data-view="dashboard">Dashboard</button>
+      <button class="tab-btn" data-view="settings">Settings</button>
+    </nav>
+    <div class="topbar-right">
+      <span id="me-email" class="me-email"></span>
+      <button class="btn btn-ghost" id="logout-btn">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="view-board" class="view">
+      <div class="board-toolbar">
+        <button class="btn btn-primary" id="new-contact-btn">+ New Inquiry</button>
+      </div>
+      <div id="board" class="board"></div>
+    </section>
+
+    <section id="view-dashboard" class="view" hidden>
+      <div class="kpi-row" id="kpi-row"></div>
+      <div class="due-lists">
+        <div class="due-card">
+          <h3>Follow-ups due</h3>
+          <div id="followups-due" class="due-list"></div>
+        </div>
+        <div class="due-card">
+          <h3>Payments due</h3>
+          <div id="payments-due" class="due-list"></div>
+        </div>
+        <div class="due-card">
+          <h3>⚠️ Payment not recorded</h3>
+          <div id="unrecorded-payments" class="due-list"></div>
+        </div>
+      </div>
+      <div class="stage-breakdown">
+        <h3>Pipeline breakdown</h3>
+        <div id="stage-breakdown" class="stage-breakdown-grid"></div>
+      </div>
+    </section>
+
+    <section id="view-settings" class="view" hidden>
+      <div class="settings-card">
+        <h3>Pricing</h3>
+        <label>3-month program — price per child (₦)
+          <input type="number" id="s-price-per-child">
+        </label>
+        <p style="font-size:12px;color:var(--ink-soft);margin-top:-6px;">
+          Applies to both payment-plan and paid-in-full contacts — total is
+          always this × number of children. Personalized coaching is priced
+          by hand on each contact instead.
+        </p>
+        <h3>Reminders</h3>
+        <label>Show follow-ups due within (days) <input type="number" id="s-followup-window"></label>
+        <label>Show payments due within (days) <input type="number" id="s-payment-window"></label>
+        <h3>Payment plan</h3>
+        <label>Installments in a payment plan <input type="number" id="s-installments"></label>
+        <label>Days between installments <input type="number" id="s-installment-gap"></label>
+        <button class="btn btn-primary" id="save-settings-btn">Save settings</button>
+        <p class="auth-error" id="settings-msg"></p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="modal-backdrop" class="modal-backdrop" hidden>
+  <div class="modal" id="contact-modal"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
