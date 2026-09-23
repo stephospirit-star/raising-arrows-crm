@@ -106,6 +106,7 @@ def init_db():
             hot INTEGER NOT NULL DEFAULT 0,
             program_type TEXT NOT NULL DEFAULT 'regular',
             price_per_child REAL,
+            discount REAL NOT NULL DEFAULT 0,
             amount_total REAL NOT NULL DEFAULT 0,
             amount_paid REAL NOT NULL DEFAULT 0,
             personalized_months INTEGER,
@@ -131,6 +132,11 @@ def init_db():
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v)
         )
+    # Migration: add columns introduced after a database already existed
+    # (CREATE TABLE IF NOT EXISTS above doesn't touch existing tables).
+    existing_cols = {r["name"] for r in conn.execute("PRAGMA table_info(contacts)")}
+    if "discount" not in existing_cols:
+        conn.execute("ALTER TABLE contacts ADD COLUMN discount REAL NOT NULL DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -498,12 +504,15 @@ class Handler(BaseHTTPRequestHandler):
                 if (c.get("name") if isinstance(c, dict) else c)
             ]
         )
+        discount = float(body.get("discount") or 0)
         if program_type == "regular":
             # 3-month program is a fixed ₦/child rate — always the settings
-            # price times however many children are on the card.
+            # price times however many children are on the card, minus any
+            # one-off discount she's chosen to give this family.
             price_per_child = float(settings["price_per_child"])
-            amount_total = num_children * price_per_child
+            amount_total = max(0.0, num_children * price_per_child - discount)
         else:
+            discount = 0.0
             # Personalized coaching is the only plan priced by hand.
             price_per_child = None
             amount_total = float(body.get("amount_total") or 0)
@@ -518,11 +527,11 @@ class Handler(BaseHTTPRequestHandler):
             installments_total = int(body.get("installments_total") or settings["installments_total_default"])
         cur = conn.execute(
             """INSERT INTO contacts
-               (name, email, phone, stage, hot, program_type, price_per_child,
+               (name, email, phone, stage, hot, program_type, price_per_child, discount,
                 amount_total, amount_paid, personalized_months, installments_total,
                 installments_paid, follow_up_due, next_payment_due, notes,
                 closed_lost_reason, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 name,
                 body.get("email", ""),
@@ -531,6 +540,7 @@ class Handler(BaseHTTPRequestHandler):
                 1 if body.get("hot") else 0,
                 program_type,
                 price_per_child,
+                discount,
                 amount_total,
                 amount_paid,
                 personalized_months,
@@ -563,7 +573,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         settings = get_settings(conn)
         fields = [
-            "name", "email", "phone", "stage", "program_type", "price_per_child",
+            "name", "email", "phone", "stage", "program_type", "price_per_child", "discount",
             "amount_total", "amount_paid", "personalized_months", "installments_total",
             "installments_paid", "follow_up_due", "next_payment_due", "notes",
             "closed_lost_reason",
@@ -595,13 +605,18 @@ class Handler(BaseHTTPRequestHandler):
             ).fetchone()["n"]
 
         if final_program_type == "regular":
-            # 3-month program is always ₦/child × number of children —
-            # not hand-entered, so it can't drift from the child list.
+            # 3-month program is always ₦/child × number of children, minus
+            # any one-off discount — not hand-entered, so the total can't
+            # drift from the child list or a stale discount value.
             price_per_child = float(settings["price_per_child"])
+            final_discount = float(updates.get("discount", row["discount"]) or 0)
             updates["price_per_child"] = price_per_child
-            updates["amount_total"] = final_num_children * price_per_child
-        elif "amount_total" in body:
-            updates["amount_total"] = float(body["amount_total"] or 0)
+            updates["discount"] = final_discount
+            updates["amount_total"] = max(0.0, final_num_children * price_per_child - final_discount)
+        else:
+            updates["discount"] = 0.0
+            if "amount_total" in body:
+                updates["amount_total"] = float(body["amount_total"] or 0)
 
         final_amount_total = updates.get("amount_total", row["amount_total"])
         if final_stage == "closed_paid_full":

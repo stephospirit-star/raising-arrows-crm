@@ -206,7 +206,7 @@ function renderCard(c) {
   const childrenNames = c.children.map((ch) => ch.name).join(", ");
   let money = "";
   if (c.amount_total > 0) {
-    money = `<div class="card-meta">${fmtMoney(c.amount_paid)} / ${fmtMoney(c.amount_total)} paid</div>`;
+    money = `<div class="card-meta">${fmtMoney(c.amount_paid)} / ${fmtMoney(c.amount_total)} paid${c.discount > 0 ? ` (${fmtMoney(c.discount)} discount applied)` : ""}</div>`;
   }
 
   card.innerHTML = `
@@ -261,6 +261,7 @@ function openContactModal(id) {
     stage: "new_inquiry",
     hot: 0,
     program_type: "regular",
+    discount: 0,
     amount_total: 0,
     amount_paid: 0,
     personalized_months: "",
@@ -330,6 +331,10 @@ function openContactModal(id) {
         the full amount at once moves this card to Closed – Paid in Full;
         paying part of it moves it to Closed – Payment Plan.
       </p>
+      <div class="form-row">
+        <label>Discount (₦) — optional</label>
+        <input type="number" id="f-discount" value="${c.discount || ""}" placeholder="e.g. 10000">
+      </div>
       <div class="form-row">
         <label>Total amount owed (₦)</label>
         <input type="text" id="computed-total-display" readonly>
@@ -412,11 +417,16 @@ function openContactModal(id) {
     if (!display) return;
     const n = collectChildNames().map((s) => s.trim()).filter(Boolean).length;
     const price = Number(state.settings.price_per_child) || 0;
-    display.value = `${fmtMoney(n * price)}  (${n} × ${fmtMoney(price)})`;
+    const discount = Number(document.getElementById("f-discount")?.value) || 0;
+    const total = Math.max(0, n * price - discount);
+    display.value = discount > 0
+      ? `${fmtMoney(total)}  (${n} × ${fmtMoney(price)} − ${fmtMoney(discount)} discount)`
+      : `${fmtMoney(total)}  (${n} × ${fmtMoney(price)})`;
   }
 
   renderChildrenRows(c.children.map((ch) => ch.name), updateComputedTotal);
   document.getElementById("children-list").addEventListener("input", updateComputedTotal);
+  document.getElementById("f-discount").addEventListener("input", updateComputedTotal);
   updateComputedTotal();
 
   document.getElementById("add-child-btn").addEventListener("click", () => {
@@ -545,6 +555,7 @@ async function saveContact(id) {
     hot: document.getElementById("f-hot").checked,
     program_type: document.getElementById("f-program-type").value,
     personalized_months: document.getElementById("f-months").value || null,
+    discount: document.getElementById("f-discount").value || 0,
     amount_total: document.getElementById("f-amount-total").value || 0,
     follow_up_due: document.getElementById("f-followup").value || null,
     next_payment_due: document.getElementById("f-next-payment").value || null,
