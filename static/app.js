@@ -615,7 +615,7 @@ function renderDashboard() {
       <div class="kpi"><div class="kpi-value">${d.follow_ups_due.length}</div><div class="kpi-label">Follow-ups due</div></div>
       <div class="kpi"><div class="kpi-value">${d.payments_due.length}</div><div class="kpi-label">Payments due</div></div>
       <div class="kpi"><div class="kpi-value">${d.unrecorded_payments.length}</div><div class="kpi-label">Payments not recorded</div></div>
-      <div class="kpi"><div class="kpi-value">${d.onboarding_pending.length}</div><div class="kpi-label">Onboarding pending</div></div>
+      <div class="kpi kpi-clickable" id="kpi-onboarding"><div class="kpi-value">${d.onboarding_pending.length}</div><div class="kpi-label">Onboarding pending &mdash; click for who</div></div>
       <div class="kpi"><div class="kpi-value">${d.total_contacts}</div><div class="kpi-label">Total contacts</div></div>
     `;
 
@@ -627,6 +627,9 @@ function renderDashboard() {
     });
     document.getElementById("kpi-payment-plan").addEventListener("click", () => {
       toggleCard("payment-plan-balances-card");
+    });
+    document.getElementById("kpi-onboarding").addEventListener("click", () => {
+      toggleCard("onboarding-pending-card");
     });
 
     const oEl = document.getElementById("outstanding-payments");
