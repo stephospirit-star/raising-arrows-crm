@@ -610,7 +610,8 @@ function renderDashboard() {
     const kpiRow = document.getElementById("kpi-row");
     kpiRow.innerHTML = `
       <div class="kpi kpi-clickable" id="kpi-received"><div class="kpi-value">${fmtMoney(d.total_received)}</div><div class="kpi-label">Total received &mdash; click for who</div></div>
-      <div class="kpi kpi-clickable" id="kpi-outstanding"><div class="kpi-value">${fmtMoney(d.total_outstanding)}</div><div class="kpi-label">Outstanding / pending &mdash; click for who</div></div>
+      <div class="kpi kpi-clickable" id="kpi-outstanding"><div class="kpi-value">${fmtMoney(d.total_outstanding)}</div><div class="kpi-label">Outstanding / pending (whole CRM) &mdash; click for who</div></div>
+      <div class="kpi kpi-clickable" id="kpi-payment-plan"><div class="kpi-value">${fmtMoney(d.payment_plan_balance_total)}</div><div class="kpi-label">On payment plans &mdash; click for who</div></div>
       <div class="kpi"><div class="kpi-value">${d.follow_ups_due.length}</div><div class="kpi-label">Follow-ups due</div></div>
       <div class="kpi"><div class="kpi-value">${d.payments_due.length}</div><div class="kpi-label">Payments due</div></div>
       <div class="kpi"><div class="kpi-value">${d.unrecorded_payments.length}</div><div class="kpi-label">Payments not recorded</div></div>
@@ -623,6 +624,9 @@ function renderDashboard() {
     });
     document.getElementById("kpi-outstanding").addEventListener("click", () => {
       toggleCard("outstanding-payments-card");
+    });
+    document.getElementById("kpi-payment-plan").addEventListener("click", () => {
+      toggleCard("payment-plan-balances-card");
     });
 
     const oEl = document.getElementById("outstanding-payments");
@@ -649,6 +653,20 @@ function renderDashboard() {
       row.innerHTML = `<span>${escapeHtml(item.name)}</span><span>${fmtMoney(item.amount_paid)} paid</span>`;
       row.addEventListener("click", () => goToContact(item.id));
       rEl.appendChild(row);
+    });
+
+    const ppEl = document.getElementById("payment-plan-balances");
+    ppEl.innerHTML = "";
+    if (d.payment_plan_balances.length === 0) {
+      ppEl.innerHTML = `<div class="due-empty">Nobody's on a payment plan right now.</div>`;
+    }
+    d.payment_plan_balances.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "due-list-item";
+      const dueText = item.next_payment_due ? fmtDate(item.next_payment_due) : "no date set";
+      row.innerHTML = `<span>${escapeHtml(item.name)} — ${fmtMoney(item.amount_remaining)} left</span><span>Due ${dueText}</span>`;
+      row.addEventListener("click", () => goToContact(item.id));
+      ppEl.appendChild(row);
     });
 
     const fEl = document.getElementById("followups-due");

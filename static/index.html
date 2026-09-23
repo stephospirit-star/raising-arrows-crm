@@ -63,12 +63,17 @@
       <div class="kpi-row" id="kpi-row"></div>
       <div class="due-lists">
         <div class="due-card" id="outstanding-payments-card" hidden>
-          <h3>Outstanding — who we're expecting payment from</h3>
+          <h3>Outstanding — new leads awaiting first payment</h3>
+          <p style="font-size:12px;color:var(--ink-soft);margin:-4px 0 8px;">Doesn't include payment-plan balances — see that section below.</p>
           <div id="outstanding-payments" class="due-list"></div>
         </div>
         <div class="due-card" id="received-payments-card" hidden>
           <h3>Received — who has already paid</h3>
           <div id="received-payments" class="due-list"></div>
+        </div>
+        <div class="due-card" id="payment-plan-balances-card" hidden>
+          <h3>On a payment plan — what's left &amp; when it's due</h3>
+          <div id="payment-plan-balances" class="due-list"></div>
         </div>
       </div>
       <div class="due-lists">

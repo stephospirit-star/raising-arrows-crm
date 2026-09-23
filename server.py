@@ -813,9 +813,13 @@ class Handler(BaseHTTPRequestHandler):
             if c["payment_not_recorded"]
         ]
 
+        # "Outstanding" here means brand-new/uncommitted leads who haven't
+        # paid anything yet — anyone already on a payment plan (partially
+        # paid) gets their own dedicated section below instead, so the two
+        # don't get lumped together.
         outstanding_payments = []
         for c in contacts:
-            if c["stage"] in ("closed_lost", "closed_paid_full"):
+            if c["stage"] in ("closed_lost", "closed_paid_full") or c["stage"] in FLAG_IF_UNPAID_STAGES:
                 continue
             remaining = (c["amount_total"] or 0) - (c["amount_paid"] or 0)
             if remaining > 0:
@@ -829,6 +833,28 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 )
         outstanding_payments.sort(key=lambda x: x["amount_remaining"], reverse=True)
+
+        # Everyone currently on a payment plan (RAFA installments or
+        # personalized coaching) — what's left to collect and when it's
+        # next due, regardless of how soon that date is.
+        payment_plan_balances = []
+        for c in contacts:
+            if c["stage"] not in FLAG_IF_UNPAID_STAGES:
+                continue
+            remaining = (c["amount_total"] or 0) - (c["amount_paid"] or 0)
+            if remaining > 0:
+                payment_plan_balances.append(
+                    {
+                        "id": c["id"],
+                        "name": c["name"],
+                        "phone": c["phone"],
+                        "stage": c["stage"],
+                        "amount_remaining": remaining,
+                        "next_payment_due": c["next_payment_due"],
+                    }
+                )
+        payment_plan_balances.sort(key=lambda x: (x["next_payment_due"] is None, x["next_payment_due"] or ""))
+        payment_plan_balance_total = sum(x["amount_remaining"] for x in payment_plan_balances)
 
         received_payments = [
             {
@@ -862,6 +888,8 @@ class Handler(BaseHTTPRequestHandler):
                 "outstanding_payments": outstanding_payments,
                 "received_payments": received_payments,
                 "onboarding_pending": onboarding_pending,
+                "payment_plan_balances": payment_plan_balances,
+                "payment_plan_balance_total": payment_plan_balance_total,
             }
         )
 
