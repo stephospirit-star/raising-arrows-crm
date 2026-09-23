@@ -55,6 +55,10 @@ DEFAULT_SETTINGS = {
 # gets flagged red on the board until she records it.
 FLAG_IF_UNPAID_STAGES = {"closed_payment_plan", "closed_personalized"}
 
+# Stages where landing here means the family should be onboarded onto the
+# platform — flagged until she checks it off.
+ONBOARDING_STAGES = {"closed_payment_plan", "closed_paid_full"}
+
 SESSION_MAX_AGE_DAYS = 30
 
 # ---------------------------------------------------------------------------
@@ -104,6 +108,7 @@ def init_db():
             phone TEXT,
             stage TEXT NOT NULL DEFAULT 'new_inquiry',
             hot INTEGER NOT NULL DEFAULT 0,
+            onboarding_completed INTEGER NOT NULL DEFAULT 0,
             program_type TEXT NOT NULL DEFAULT 'regular',
             price_per_child REAL,
             discount REAL NOT NULL DEFAULT 0,
@@ -137,6 +142,8 @@ def init_db():
     existing_cols = {r["name"] for r in conn.execute("PRAGMA table_info(contacts)")}
     if "discount" not in existing_cols:
         conn.execute("ALTER TABLE contacts ADD COLUMN discount REAL NOT NULL DEFAULT 0")
+    if "onboarding_completed" not in existing_cols:
+        conn.execute("ALTER TABLE contacts ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -206,6 +213,9 @@ def contact_to_dict(conn, row):
     d["num_children"] = len(d["children"])
     d["payment_not_recorded"] = (
         d["stage"] in FLAG_IF_UNPAID_STAGES and (d["amount_paid"] or 0) <= 0
+    )
+    d["onboarding_pending"] = (
+        d["stage"] in ONBOARDING_STAGES and not d["onboarding_completed"]
     )
     return d
 
@@ -527,17 +537,19 @@ class Handler(BaseHTTPRequestHandler):
             installments_total = int(body.get("installments_total") or settings["installments_total_default"])
         cur = conn.execute(
             """INSERT INTO contacts
-               (name, email, phone, stage, hot, program_type, price_per_child, discount,
+               (name, email, phone, stage, hot, onboarding_completed, program_type,
+                price_per_child, discount,
                 amount_total, amount_paid, personalized_months, installments_total,
                 installments_paid, follow_up_due, next_payment_due, notes,
                 closed_lost_reason, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 name,
                 body.get("email", ""),
                 body.get("phone", ""),
                 stage,
                 1 if body.get("hot") else 0,
+                1 if body.get("onboarding_completed") else 0,
                 program_type,
                 price_per_child,
                 discount,
@@ -584,6 +596,8 @@ class Handler(BaseHTTPRequestHandler):
                 updates[f] = body[f]
         if "hot" in body:
             updates["hot"] = 1 if body["hot"] else 0
+        if "onboarding_completed" in body:
+            updates["onboarding_completed"] = 1 if body["onboarding_completed"] else 0
         if "stage" in updates and updates["stage"] not in STAGE_KEYS:
             self._send_json({"error": "invalid stage"}, 400)
             return
@@ -830,6 +844,12 @@ class Handler(BaseHTTPRequestHandler):
         ]
         received_payments.sort(key=lambda x: x["amount_paid"], reverse=True)
 
+        onboarding_pending = [
+            {"id": c["id"], "name": c["name"], "phone": c["phone"], "stage": c["stage"]}
+            for c in contacts
+            if c["onboarding_pending"]
+        ]
+
         self._send_json(
             {
                 "stage_counts": stage_counts,
@@ -841,6 +861,7 @@ class Handler(BaseHTTPRequestHandler):
                 "unrecorded_payments": unrecorded_payments,
                 "outstanding_payments": outstanding_payments,
                 "received_payments": received_payments,
+                "onboarding_pending": onboarding_pending,
             }
         )
 

@@ -209,16 +209,28 @@ function renderCard(c) {
     money = `<div class="card-meta">${fmtMoney(c.amount_paid)} / ${fmtMoney(c.amount_total)} paid${c.discount > 0 ? ` (${fmtMoney(c.discount)} discount applied)` : ""}</div>`;
   }
 
+  const onboardingScope = ["closed_payment_plan", "closed_paid_full"].includes(c.stage);
+
   card.innerHTML = `
     <div class="card-name">${c.hot ? "🔥" : ""} ${escapeHtml(c.name)}</div>
     <div class="card-meta">${c.phone ? escapeHtml(c.phone) : ""}</div>
     <div class="card-meta">${c.num_children} child${c.num_children === 1 ? "" : "ren"}${childrenNames ? ": " + escapeHtml(childrenNames) : ""}</div>
     ${money}
     ${c.payment_not_recorded ? `<span class="badge badge-overdue">⚠️ Payment not recorded</span>` : ""}
+    ${onboardingScope ? (c.onboarding_pending ? `<span class="badge badge-overdue badge-clickable" id="onboarding-badge">⚠️ Onboarding pending — click when done</span>` : `<span class="badge badge-ok">✓ Onboarded</span>`) : ""}
     ${dueBadge(c.follow_up_due, "follow")}
     ${["closed_payment_plan", "closed_personalized"].includes(c.stage) ? dueBadge(c.next_payment_due, "payment") : ""}
     <select class="card-move-select">${moveStageOptions(c.stage)}</select>
   `;
+
+  const onboardingBadge = card.querySelector("#onboarding-badge");
+  if (onboardingBadge) {
+    onboardingBadge.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await api(`/api/contacts/${c.id}`, { method: "PUT", body: { onboarding_completed: true } });
+      await refreshAll();
+    });
+  }
 
   const moveSelect = card.querySelector(".card-move-select");
   moveSelect.addEventListener("click", (e) => e.stopPropagation());
@@ -260,6 +272,7 @@ function openContactModal(id) {
     phone: "",
     stage: "new_inquiry",
     hot: 0,
+    onboarding_completed: 0,
     program_type: "regular",
     discount: 0,
     amount_total: 0,
@@ -303,6 +316,11 @@ function openContactModal(id) {
           <input type="checkbox" id="f-hot" style="width:auto;" ${c.hot ? "checked" : ""}> Hot 🔥
         </label>
       </div>
+    </div>
+    <div class="form-row" id="onboarding-row" style="${["closed_payment_plan", "closed_paid_full"].includes(c.stage) ? "" : "display:none"}">
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink);">
+        <input type="checkbox" id="f-onboarding" style="width:auto;" ${c.onboarding_completed ? "checked" : ""}> Onboarding completed
+      </label>
     </div>
 
     <div class="section-title">Children</div>
@@ -449,6 +467,7 @@ function openContactModal(id) {
     document.getElementById("lost-reason-row").style.display = stage === "closed_lost" ? "" : "none";
     document.getElementById("followup-row").style.display = stage === "closed_payment_plan" ? "none" : "";
     document.getElementById("payment-plan-note").style.display = stage === "closed_payment_plan" ? "" : "none";
+    document.getElementById("onboarding-row").style.display = ["closed_payment_plan", "closed_paid_full"].includes(stage) ? "" : "none";
   });
 
   document.getElementById("cancel-modal-btn").addEventListener("click", closeModal);
@@ -553,6 +572,7 @@ async function saveContact(id) {
     phone: document.getElementById("f-phone").value.trim(),
     stage: document.getElementById("f-stage").value,
     hot: document.getElementById("f-hot").checked,
+    onboarding_completed: document.getElementById("f-onboarding").checked,
     program_type: document.getElementById("f-program-type").value,
     personalized_months: document.getElementById("f-months").value || null,
     discount: document.getElementById("f-discount").value || 0,
@@ -594,6 +614,7 @@ function renderDashboard() {
       <div class="kpi"><div class="kpi-value">${d.follow_ups_due.length}</div><div class="kpi-label">Follow-ups due</div></div>
       <div class="kpi"><div class="kpi-value">${d.payments_due.length}</div><div class="kpi-label">Payments due</div></div>
       <div class="kpi"><div class="kpi-value">${d.unrecorded_payments.length}</div><div class="kpi-label">Payments not recorded</div></div>
+      <div class="kpi"><div class="kpi-value">${d.onboarding_pending.length}</div><div class="kpi-label">Onboarding pending</div></div>
       <div class="kpi"><div class="kpi-value">${d.total_contacts}</div><div class="kpi-label">Total contacts</div></div>
     `;
 
@@ -667,6 +688,19 @@ function renderDashboard() {
       row.innerHTML = `<span>⚠️ ${escapeHtml(item.name)}</span><span>${escapeHtml(item.phone || "")}</span>`;
       row.addEventListener("click", () => goToContact(item.id));
       uEl.appendChild(row);
+    });
+
+    const obEl = document.getElementById("onboarding-pending");
+    obEl.innerHTML = "";
+    if (d.onboarding_pending.length === 0) {
+      obEl.innerHTML = `<div class="due-empty">Nothing flagged.</div>`;
+    }
+    d.onboarding_pending.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "due-list-item";
+      row.innerHTML = `<span>⚠️ ${escapeHtml(item.name)}</span><span>${escapeHtml(item.phone || "")}</span>`;
+      row.addEventListener("click", () => goToContact(item.id));
+      obEl.appendChild(row);
     });
 
     const sb = document.getElementById("stage-breakdown");

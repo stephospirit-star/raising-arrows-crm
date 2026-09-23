@@ -183,6 +183,8 @@ main { padding: 20px; }
 .badge-overdue { background: var(--danger-soft); color: var(--danger); }
 .badge-soon { background: var(--warn-soft); color: var(--warn); }
 .badge-ok { background: var(--ok-soft); color: var(--ok); }
+.badge-clickable { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+.badge-clickable:hover { filter: brightness(0.95); }
 
 .card-move-select {
   display: block;
