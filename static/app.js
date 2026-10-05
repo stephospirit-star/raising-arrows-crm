@@ -374,13 +374,12 @@ function openContactModal(id) {
       ${c.payment_not_recorded ? `<p style="color:var(--danger);font-weight:600;margin:0 0 8px;">⚠️ No payment has been recorded yet — please enter what they've paid.</p>` : ""}
       ${c.stage === "closed_paid_full" ? `
       <div>Paid in full: <b>${fmtMoney(c.amount_total)}</b></div>
-      ` : `
+      ` : id ? `
       <div>
         Paid so far: <b>${fmtMoney(c.amount_paid)}</b> &nbsp;·&nbsp;
         Remaining: <b>${fmtMoney((c.amount_total || 0) - (c.amount_paid || 0))}</b>
-        ${id ? `<button class="btn btn-small" id="record-payment-btn" type="button" style="float:right;">Record payment</button>` : ""}
+        <button class="btn btn-small" id="record-payment-btn" type="button" style="float:right;">Record payment</button>
       </div>
-      ${id ? `
       <div id="record-payment-form" hidden style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <div class="form-row">
           <label>Amount received (₦)</label>
@@ -392,7 +391,17 @@ function openContactModal(id) {
         </label>
         <button class="btn btn-primary btn-small" id="confirm-payment-btn" type="button">Add payment</button>
         <button class="btn btn-small" id="cancel-payment-btn" type="button">Cancel</button>
-      </div>` : ""}
+      </div>
+      ` : `
+      <div class="form-row" style="margin-bottom:0;">
+        <label>Amount already paid (₦) — optional</label>
+        <input type="number" id="f-initial-paid" placeholder="e.g. 30000">
+      </div>
+      <p style="font-size:12px;color:var(--ink-soft);margin:6px 0 0;">
+        If they've already paid something, enter it here — saving will move this
+        card straight to the right closed stage (Paid in Full, Payment Plan, or
+        Personalized Coaching), the same as Record Payment does.
+      </p>
       `}
     </div>
 
@@ -583,6 +592,12 @@ async function saveContact(id) {
     notes: document.getElementById("f-notes").value.trim(),
     children,
   };
+
+  if (!id) {
+    // Only on creation — editing an existing contact goes through
+    // Record Payment instead, so this field doesn't exist on that form.
+    body.amount_paid = document.getElementById("f-initial-paid")?.value || 0;
+  }
 
   if (!body.name) {
     alert("Name is required");

@@ -233,6 +233,20 @@ def parse_date(s):
         return None
 
 
+def resolve_stage_for_payment(program_type, amount_total, total_paid, current_stage):
+    """Given how much has been paid in total, decide which stage a contact
+    belongs in — the same rule Record Payment uses on an existing contact,
+    reused at creation time so a payment can be entered right in the
+    creation form instead of needing the card saved first."""
+    if total_paid <= 0:
+        return current_stage
+    if program_type == "personalized":
+        return "closed_personalized"
+    if program_type == "regular" and amount_total > 0:
+        return "closed_paid_full" if total_paid >= amount_total else "closed_payment_plan"
+    return current_stage
+
+
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
@@ -526,8 +540,6 @@ class Handler(BaseHTTPRequestHandler):
             # Personalized coaching is the only plan priced by hand.
             price_per_child = None
             amount_total = float(body.get("amount_total") or 0)
-        # "Closed – Paid in Full" means paid in full, by definition.
-        amount_paid = amount_total if stage == "closed_paid_full" else float(body.get("amount_paid") or 0)
         personalized_months = body.get("personalized_months")
         if program_type == "personalized" and personalized_months:
             # Personalized coaching pays in 30-day installments, one per
@@ -535,6 +547,37 @@ class Handler(BaseHTTPRequestHandler):
             installments_total = int(personalized_months)
         else:
             installments_total = int(body.get("installments_total") or settings["installments_total_default"])
+
+        # An amount entered right here at creation time is treated exactly
+        # like recording a payment on an existing card — it decides the
+        # closing stage, so a card never has to be saved blank first just
+        # to record that the family already paid.
+        provided_paid = float(body.get("amount_paid") or 0)
+        stage = resolve_stage_for_payment(program_type, amount_total, provided_paid, stage)
+        installments_paid = int(body.get("installments_paid") or 0)
+        next_payment_due = body.get("next_payment_due")
+
+        if stage == "closed_paid_full":
+            # Paid in Full means paid in full, by definition.
+            amount_paid = amount_total
+            installments_paid = installments_total
+            next_payment_due = None
+        elif stage in ("closed_payment_plan", "closed_personalized") and provided_paid > 0:
+            amount_paid = provided_paid
+            if amount_total > 0 and provided_paid >= amount_total:
+                # Paid in full up front — nothing more to collect.
+                installments_paid = installments_total
+                next_payment_due = None
+            else:
+                installments_paid = max(installments_paid, 1)
+                gap = int(settings.get("installment_gap_days", 30))
+                if installments_paid < installments_total:
+                    next_payment_due = next_payment_due or (date.today() + timedelta(days=gap)).isoformat()
+                else:
+                    next_payment_due = None
+        else:
+            amount_paid = provided_paid
+
         cur = conn.execute(
             """INSERT INTO contacts
                (name, email, phone, stage, hot, onboarding_completed, program_type,
@@ -557,9 +600,9 @@ class Handler(BaseHTTPRequestHandler):
                 amount_paid,
                 personalized_months,
                 installments_total,
-                int(body.get("installments_paid") or 0),
+                installments_paid,
                 body.get("follow_up_due"),
-                body.get("next_payment_due"),
+                next_payment_due,
                 body.get("notes", ""),
                 body.get("closed_lost_reason", ""),
                 now,
@@ -696,12 +739,9 @@ class Handler(BaseHTTPRequestHandler):
         # lands. Personalized coaching always closes to Personalized
         # Coaching; RAFA (the 3-month program) closes Paid in Full when the
         # full amount is in, otherwise Payment Plan.
-        new_stage = row["stage"]
-        if row["program_type"] == "personalized" and row["stage"] != "closed_personalized":
-            new_stage = "closed_personalized"
-        elif row["program_type"] == "regular" and row["stage"] != "closed_paid_full":
-            total = row["amount_total"] or 0
-            new_stage = "closed_paid_full" if total > 0 and new_paid >= total else "closed_payment_plan"
+        new_stage = resolve_stage_for_payment(
+            row["program_type"], row["amount_total"] or 0, new_paid, row["stage"]
+        )
 
         if new_stage == "closed_paid_full":
             new_paid = row["amount_total"]
