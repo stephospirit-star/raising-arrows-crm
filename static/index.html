@@ -43,6 +43,7 @@
     <nav class="tabs">
       <button class="tab-btn active" data-view="board">Pipeline</button>
       <button class="tab-btn" data-view="dashboard">Dashboard</button>
+      <button class="tab-btn" data-view="students">Students</button>
       <button class="tab-btn" data-view="settings">Settings</button>
     </nav>
     <div class="topbar-right">
@@ -100,6 +101,58 @@
       </div>
     </section>
 
+    <section id="view-students" class="view" hidden>
+      <div class="due-card" id="birthdays-banner-card" hidden style="margin-bottom:16px;">
+        <h3>🎂 Birthdays this week</h3>
+        <div id="birthdays-banner" class="due-list"></div>
+      </div>
+
+      <div class="track-tabs" id="track-tabs">
+        <button class="track-tab-btn active" data-track="">All</button>
+        <button class="track-tab-btn" data-track="oaks">Oaks</button>
+        <button class="track-tab-btn" data-track="explorer">Explorer</button>
+        <button class="track-tab-btn" data-track="personalized">Personalized</button>
+      </div>
+
+      <div class="students-table-wrap">
+        <table class="students-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Parent / Family</th>
+              <th>Track</th>
+              <th>Birthday</th>
+              <th>Progress</th>
+            </tr>
+          </thead>
+          <tbody id="students-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="sessions-section" id="sessions-section">
+        <div class="sessions-column" data-track="oaks">
+          <div class="sessions-column-header">
+            <h3>Oaks — class sessions</h3>
+            <div class="sessions-actions">
+              <button class="btn btn-small" data-action="generate" data-track="oaks">+ Generate 12-week cycle</button>
+              <button class="btn btn-small" data-action="add" data-track="oaks">+ Add session</button>
+            </div>
+          </div>
+          <div class="session-list" id="sessions-oaks"></div>
+        </div>
+        <div class="sessions-column" data-track="explorer">
+          <div class="sessions-column-header">
+            <h3>Explorer — class sessions</h3>
+            <div class="sessions-actions">
+              <button class="btn btn-small" data-action="generate" data-track="explorer">+ Generate 12-week cycle</button>
+              <button class="btn btn-small" data-action="add" data-track="explorer">+ Add session</button>
+            </div>
+          </div>
+          <div class="session-list" id="sessions-explorer"></div>
+        </div>
+      </div>
+    </section>
+
     <section id="view-settings" class="view" hidden>
       <div class="settings-card">
         <h3>Pricing</h3>
@@ -126,6 +179,10 @@
 
 <div id="modal-backdrop" class="modal-backdrop" hidden>
   <div class="modal" id="contact-modal"></div>
+</div>
+
+<div id="session-modal-backdrop" class="modal-backdrop" hidden>
+  <div class="modal" id="session-modal"></div>
 </div>
 
 <script src="app.js"></script>

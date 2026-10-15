@@ -305,3 +305,75 @@ main { padding: 20px; }
 .section-title:first-of-type { border-top: none; padding-top: 0; }
 .hot-toggle { cursor: pointer; }
 .amount-summary { background: var(--bg); border-radius: 8px; padding: 10px; font-size: 13px; margin-bottom: 10px; }
+
+/* ---------- Students ---------- */
+.track-tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+.track-tab-btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  padding: 7px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.track-tab-btn.active { background: var(--accent-soft); color: var(--accent-dark); font-weight: 600; border-color: var(--accent-soft); }
+
+.students-table-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 24px; }
+.students-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.students-table th {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.students-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.students-table tr:last-child td { border-bottom: none; }
+.students-table select, .students-table input[type="date"] {
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.progress-control { display: flex; align-items: center; gap: 6px; }
+.progress-control button {
+  width: 22px; height: 22px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.birthday-tag { font-size: 11px; padding: 2px 6px; border-radius: 6px; margin-left: 6px; }
+
+.sessions-section { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.sessions-column { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+.sessions-column-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.sessions-column-header h3 { margin: 0; font-size: 14px; }
+.sessions-actions { display: flex; gap: 6px; }
+.session-list { max-height: 320px; overflow-y: auto; }
+.session-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 13px;
+}
+.session-row:hover { background: var(--accent-soft); }
+.session-row:last-child { border-bottom: none; }
+
+.roster-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.roster-row:last-child { border-bottom: none; }
+.roster-actions { display: flex; gap: 6px; }
+.roster-actions button { padding: 4px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); cursor: pointer; }
+.roster-actions button.active-present { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-soft); }
+.roster-actions button.active-absent { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-soft); }
+
+@media (max-width: 720px) {
+  .sessions-section { grid-template-columns: 1fr; }
+}

@@ -42,6 +42,15 @@ STAGES = [
 ]
 STAGE_KEYS = {s["key"] for s in STAGES}
 
+CLASS_TRACKS = [
+    {"key": "oaks", "label": "Oaks"},
+    {"key": "explorer", "label": "Explorer"},
+    {"key": "personalized", "label": "Personalized"},
+]
+CLASS_TRACK_KEYS = {t["key"] for t in CLASS_TRACKS}
+GROUP_TRACKS = {"oaks", "explorer"}  # tracks that use shared class_sessions
+SESSIONS_PER_MONTH = 4  # all three tracks run a fixed 12-week (weekly) cycle
+
 DEFAULT_SETTINGS = {
     "price_per_child": "50000",
     "follow_up_window_days": "2",
@@ -129,7 +138,30 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
             name TEXT,
-            sort_order INTEGER DEFAULT 0
+            sort_order INTEGER DEFAULT 0,
+            date_of_birth TEXT,
+            class_track TEXT,
+            recurring_day TEXT,
+            recurring_time TEXT,
+            personalized_sessions_completed INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS class_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            class_track TEXT NOT NULL,
+            session_date TEXT NOT NULL,
+            session_time TEXT,
+            notes TEXT,
+            created_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS attendance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            child_id INTEGER NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+            session_id INTEGER NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
+            status TEXT NOT NULL,
+            marked_at TEXT,
+            UNIQUE(child_id, session_id)
         );
         """
     )
@@ -144,6 +176,17 @@ def init_db():
         conn.execute("ALTER TABLE contacts ADD COLUMN discount REAL NOT NULL DEFAULT 0")
     if "onboarding_completed" not in existing_cols:
         conn.execute("ALTER TABLE contacts ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0")
+    existing_child_cols = {r["name"] for r in conn.execute("PRAGMA table_info(children)")}
+    if "date_of_birth" not in existing_child_cols:
+        conn.execute("ALTER TABLE children ADD COLUMN date_of_birth TEXT")
+    if "class_track" not in existing_child_cols:
+        conn.execute("ALTER TABLE children ADD COLUMN class_track TEXT")
+    if "recurring_day" not in existing_child_cols:
+        conn.execute("ALTER TABLE children ADD COLUMN recurring_day TEXT")
+    if "recurring_time" not in existing_child_cols:
+        conn.execute("ALTER TABLE children ADD COLUMN recurring_time TEXT")
+    if "personalized_sessions_completed" not in existing_child_cols:
+        conn.execute("ALTER TABLE children ADD COLUMN personalized_sessions_completed INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -217,6 +260,43 @@ def contact_to_dict(conn, row):
     d["onboarding_pending"] = (
         d["stage"] in ONBOARDING_STAGES and not d["onboarding_completed"]
     )
+    return d
+
+
+def child_full_dict(conn, child_row):
+    contact = conn.execute(
+        "SELECT id, name, phone, program_type, personalized_months FROM contacts WHERE id = ?",
+        (child_row["contact_id"],),
+    ).fetchone()
+    d = dict(child_row)
+    d["contact_name"] = contact["name"] if contact else None
+    d["contact_phone"] = contact["phone"] if contact else None
+    if d["class_track"] == "personalized":
+        months = (contact["personalized_months"] if contact else None) or 3
+        d["personalized_sessions_total"] = int(months) * SESSIONS_PER_MONTH
+    else:
+        d["personalized_sessions_total"] = None
+    dob = parse_date(d.get("date_of_birth"))
+    d["birthday_soon"] = False
+    d["birthday_today"] = False
+    if dob:
+        today = date.today()
+
+        def _in_year(y):
+            try:
+                return dob.replace(year=y)
+            except ValueError:
+                return dob.replace(year=y, day=28)  # Feb 29 in a non-leap year
+
+        next_bday = _in_year(today.year)
+        if next_bday < today:
+            next_bday = _in_year(today.year + 1)
+        days_away = (next_bday - today).days
+        d["birthday_today"] = days_away == 0
+        d["birthday_soon"] = 0 <= days_away <= 7
+        d["days_to_birthday"] = days_away
+    else:
+        d["days_to_birthday"] = None
     return d
 
 
@@ -371,6 +451,34 @@ class Handler(BaseHTTPRequestHandler):
                     if not self._require_auth(conn):
                         return
                     self._handle_dashboard(conn)
+                elif path == "/api/class-tracks":
+                    self._send_json({"tracks": CLASS_TRACKS})
+                elif path == "/api/children":
+                    if not self._require_auth(conn):
+                        return
+                    rows = conn.execute(
+                        "SELECT * FROM children ORDER BY name"
+                    ).fetchall()
+                    self._send_json([child_full_dict(conn, r) for r in rows])
+                elif path == "/api/class-sessions":
+                    if not self._require_auth(conn):
+                        return
+                    track = parse_qs(parsed.query).get("track", [None])[0]
+                    if track:
+                        rows = conn.execute(
+                            "SELECT * FROM class_sessions WHERE class_track = ? ORDER BY session_date",
+                            (track,),
+                        ).fetchall()
+                    else:
+                        rows = conn.execute(
+                            "SELECT * FROM class_sessions ORDER BY session_date"
+                        ).fetchall()
+                    self._send_json([dict(r) for r in rows])
+                elif path.endswith("/roster") and path.startswith("/api/class-sessions/"):
+                    if not self._require_auth(conn):
+                        return
+                    session_id = int(path.split("/")[3])
+                    self._handle_session_roster(conn, session_id)
                 else:
                     self._static_file(path)
             finally:
@@ -403,6 +511,24 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     cid = int(path.split("/")[3])
                     self._handle_record_payment(conn, cid, body)
+                elif path.endswith("/personalized-session") and path.startswith("/api/children/"):
+                    if not self._require_auth(conn):
+                        return
+                    child_id = int(path.split("/")[3])
+                    self._handle_personalized_session(conn, child_id, body)
+                elif path == "/api/class-sessions/generate":
+                    if not self._require_auth(conn):
+                        return
+                    self._handle_generate_sessions(conn, body)
+                elif path == "/api/class-sessions":
+                    if not self._require_auth(conn):
+                        return
+                    self._handle_create_session(conn, body)
+                elif path.endswith("/attendance") and path.startswith("/api/class-sessions/"):
+                    if not self._require_auth(conn):
+                        return
+                    session_id = int(path.split("/")[3])
+                    self._handle_set_attendance(conn, session_id, body)
                 else:
                     self._send_json({"error": "not found"}, 404)
             finally:
@@ -424,6 +550,11 @@ class Handler(BaseHTTPRequestHandler):
                     if not self._require_auth(conn):
                         return
                     self._handle_update_settings(conn, body)
+                elif path.startswith("/api/children/") and "/" not in path[len("/api/children/"):]:
+                    if not self._require_auth(conn):
+                        return
+                    child_id = int(path.split("/")[-1])
+                    self._handle_update_child(conn, child_id, body)
                 else:
                     self._send_json({"error": "not found"}, 404)
             finally:
@@ -448,6 +579,13 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     child_id = int(parts[5])
                     conn.execute("DELETE FROM children WHERE id = ?", (child_id,))
+                    conn.commit()
+                    self._send_json({"ok": True})
+                elif len(parts) == 4 and path.startswith("/api/class-sessions/"):
+                    if not self._require_auth(conn):
+                        return
+                    session_id = int(parts[3])
+                    conn.execute("DELETE FROM class_sessions WHERE id = ?", (session_id,))
                     conn.commit()
                     self._send_json({"ok": True})
                 else:
@@ -726,6 +864,130 @@ class Handler(BaseHTTPRequestHandler):
         crow = conn.execute("SELECT * FROM contacts WHERE id = ?", (cid,)).fetchone()
         self._send_json(contact_to_dict(conn, crow), 201)
 
+    def _handle_update_child(self, conn, child_id, body):
+        row = conn.execute("SELECT * FROM children WHERE id = ?", (child_id,)).fetchone()
+        if not row:
+            self._send_json({"error": "not found"}, 404)
+            return
+        fields = ["name", "date_of_birth", "class_track", "recurring_day", "recurring_time"]
+        updates = {}
+        for f in fields:
+            if f in body:
+                updates[f] = body[f]
+        if "class_track" in updates and updates["class_track"] not in CLASS_TRACK_KEYS | {"", None}:
+            self._send_json({"error": "invalid class_track"}, 400)
+            return
+        if updates:
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            conn.execute(
+                f"UPDATE children SET {set_clause} WHERE id = ?",
+                (*updates.values(), child_id),
+            )
+            conn.commit()
+        row = conn.execute("SELECT * FROM children WHERE id = ?", (child_id,)).fetchone()
+        self._send_json(child_full_dict(conn, row))
+
+    def _handle_personalized_session(self, conn, child_id, body):
+        row = conn.execute("SELECT * FROM children WHERE id = ?", (child_id,)).fetchone()
+        if not row:
+            self._send_json({"error": "not found"}, 404)
+            return
+        delta = int(body.get("delta") or 1)
+        new_count = max(0, row["personalized_sessions_completed"] + delta)
+        conn.execute(
+            "UPDATE children SET personalized_sessions_completed = ? WHERE id = ?",
+            (new_count, child_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM children WHERE id = ?", (child_id,)).fetchone()
+        self._send_json(child_full_dict(conn, row))
+
+    def _handle_create_session(self, conn, body):
+        track = body.get("class_track")
+        session_date = body.get("session_date")
+        if track not in GROUP_TRACKS:
+            self._send_json({"error": "class_track must be oaks or explorer"}, 400)
+            return
+        if not session_date:
+            self._send_json({"error": "session_date is required"}, 400)
+            return
+        conn.execute(
+            """INSERT INTO class_sessions (class_track, session_date, session_time, notes, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (track, session_date, body.get("session_time"), body.get("notes", ""), datetime.utcnow().isoformat()),
+        )
+        conn.commit()
+        rows = conn.execute(
+            "SELECT * FROM class_sessions WHERE class_track = ? ORDER BY session_date", (track,)
+        ).fetchall()
+        self._send_json([dict(r) for r in rows], 201)
+
+    def _handle_generate_sessions(self, conn, body):
+        track = body.get("class_track")
+        start_date = parse_date(body.get("start_date"))
+        if track not in GROUP_TRACKS:
+            self._send_json({"error": "class_track must be oaks or explorer"}, 400)
+            return
+        if not start_date:
+            self._send_json({"error": "a valid start_date is required"}, 400)
+            return
+        session_time = body.get("session_time")
+        now = datetime.utcnow().isoformat()
+        for week in range(12):
+            session_date = (start_date + timedelta(weeks=week)).isoformat()
+            conn.execute(
+                """INSERT INTO class_sessions (class_track, session_date, session_time, notes, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (track, session_date, session_time, f"Week {week + 1} of 12", now),
+            )
+        conn.commit()
+        rows = conn.execute(
+            "SELECT * FROM class_sessions WHERE class_track = ? ORDER BY session_date", (track,)
+        ).fetchall()
+        self._send_json([dict(r) for r in rows], 201)
+
+    def _handle_session_roster(self, conn, session_id):
+        session = conn.execute("SELECT * FROM class_sessions WHERE id = ?", (session_id,)).fetchone()
+        if not session:
+            self._send_json({"error": "not found"}, 404)
+            return
+        children = conn.execute(
+            "SELECT * FROM children WHERE class_track = ? ORDER BY name",
+            (session["class_track"],),
+        ).fetchall()
+        attendance = {
+            r["child_id"]: r["status"]
+            for r in conn.execute(
+                "SELECT child_id, status FROM attendance WHERE session_id = ?", (session_id,)
+            )
+        }
+        roster = []
+        for c in children:
+            cd = child_full_dict(conn, c)
+            cd["attendance_status"] = attendance.get(c["id"])
+            roster.append(cd)
+        self._send_json({"session": dict(session), "roster": roster})
+
+    def _handle_set_attendance(self, conn, session_id, body):
+        session = conn.execute("SELECT * FROM class_sessions WHERE id = ?", (session_id,)).fetchone()
+        if not session:
+            self._send_json({"error": "not found"}, 404)
+            return
+        now = datetime.utcnow().isoformat()
+        for entry in body.get("attendance") or []:
+            child_id = entry.get("child_id")
+            status = entry.get("status")
+            if not child_id or status not in ("present", "absent"):
+                continue
+            conn.execute(
+                """INSERT INTO attendance (child_id, session_id, status, marked_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(child_id, session_id) DO UPDATE SET status = excluded.status, marked_at = excluded.marked_at""",
+                (child_id, session_id, status, now),
+            )
+        conn.commit()
+        self._handle_session_roster(conn, session_id)
+
     def _handle_record_payment(self, conn, cid, body):
         row = conn.execute("SELECT * FROM contacts WHERE id = ?", (cid,)).fetchone()
         if not row:
@@ -916,6 +1178,24 @@ class Handler(BaseHTTPRequestHandler):
             if c["onboarding_pending"]
         ]
 
+        children_rows = conn.execute("SELECT * FROM children").fetchall()
+        birthdays_upcoming = []
+        for cr in children_rows:
+            cd = child_full_dict(conn, cr)
+            if cd["days_to_birthday"] is not None and cd["days_to_birthday"] <= 7:
+                birthdays_upcoming.append(
+                    {
+                        "id": cd["id"],
+                        "name": cd["name"],
+                        "contact_name": cd["contact_name"],
+                        "contact_phone": cd["contact_phone"],
+                        "date_of_birth": cd["date_of_birth"],
+                        "days_to_birthday": cd["days_to_birthday"],
+                        "birthday_today": cd["birthday_today"],
+                    }
+                )
+        birthdays_upcoming.sort(key=lambda x: x["days_to_birthday"])
+
         self._send_json(
             {
                 "stage_counts": stage_counts,
@@ -930,6 +1210,7 @@ class Handler(BaseHTTPRequestHandler):
                 "onboarding_pending": onboarding_pending,
                 "payment_plan_balances": payment_plan_balances,
                 "payment_plan_balance_total": payment_plan_balance_total,
+                "birthdays_upcoming": birthdays_upcoming,
             }
         )
 

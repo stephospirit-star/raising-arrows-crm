@@ -6,6 +6,9 @@ const state = {
   settings: {},
   currentView: "board",
   openContactId: null,
+  classTracks: [],
+  children: [],
+  trackFilter: "",
 };
 
 function fmtMoney(n) {
@@ -101,6 +104,8 @@ async function startApp() {
   document.getElementById("me-email").textContent = me.email;
   const stagesRes = await api("/api/stages");
   state.stages = stagesRes.stages;
+  const tracksRes = await api("/api/class-tracks");
+  state.classTracks = tracksRes.tracks;
   await refreshAll();
   handleHashRoute();
 }
@@ -116,9 +121,11 @@ function setView(view) {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   document.getElementById("view-board").hidden = view !== "board";
   document.getElementById("view-dashboard").hidden = view !== "dashboard";
+  document.getElementById("view-students").hidden = view !== "students";
   document.getElementById("view-settings").hidden = view !== "settings";
   if (view === "dashboard") renderDashboard();
   if (view === "settings") renderSettings();
+  if (view === "students") renderStudents();
 }
 
 async function refreshAll() {
@@ -782,6 +789,232 @@ document.getElementById("save-settings-btn").addEventListener("click", async () 
   document.getElementById("settings-msg").style.color = "var(--ok)";
   document.getElementById("settings-msg").textContent = "Saved.";
   setTimeout(() => (document.getElementById("settings-msg").textContent = ""), 2000);
+});
+
+// -------------------------------------------------------------- Students ----
+
+const TRACK_LABELS = { oaks: "Oaks", explorer: "Explorer", personalized: "Personalized" };
+
+document.querySelectorAll(".track-tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    state.trackFilter = btn.dataset.track;
+    document.querySelectorAll(".track-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+    renderStudentsTable();
+  });
+});
+
+async function renderStudents() {
+  const [children, oaksSessions, explorerSessions] = await Promise.all([
+    api("/api/children"),
+    api("/api/class-sessions?track=oaks"),
+    api("/api/class-sessions?track=explorer"),
+  ]);
+  state.children = children;
+  state.oaksSessions = oaksSessions;
+  state.explorerSessions = explorerSessions;
+
+  const bEl = document.getElementById("birthdays-banner");
+  const bCard = document.getElementById("birthdays-banner-card");
+  const soon = children
+    .filter((c) => c.days_to_birthday !== null && c.days_to_birthday <= 7)
+    .sort((a, b) => a.days_to_birthday - b.days_to_birthday);
+  bCard.hidden = soon.length === 0;
+  bEl.innerHTML = "";
+  soon.forEach((c) => {
+    const row = document.createElement("div");
+    row.className = "due-list-item";
+    const when = c.birthday_today ? "🎉 Today!" : `in ${c.days_to_birthday} day${c.days_to_birthday === 1 ? "" : "s"}`;
+    row.innerHTML = `<span>${escapeHtml(c.name)} (${escapeHtml(c.contact_name || "")})</span><span>${when}</span>`;
+    bEl.appendChild(row);
+  });
+
+  renderStudentsTable();
+  renderSessionColumn("oaks");
+  renderSessionColumn("explorer");
+}
+
+function renderStudentsTable() {
+  const tbody = document.getElementById("students-tbody");
+  tbody.innerHTML = "";
+  const filtered = state.trackFilter
+    ? state.children.filter((c) => c.class_track === state.trackFilter)
+    : state.children;
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="due-empty">No students here yet.</td></tr>`;
+    return;
+  }
+
+  filtered.forEach((c) => {
+    const tr = document.createElement("tr");
+
+    const trackOptions =
+      `<option value="">—</option>` +
+      state.classTracks.map((t) => `<option value="${t.key}" ${t.key === c.class_track ? "selected" : ""}>${t.label}</option>`).join("");
+
+    let progressHtml = "";
+    if (c.class_track === "personalized") {
+      progressHtml = `
+        <div class="progress-control">
+          <button type="button" data-action="dec" data-id="${c.id}">−</button>
+          <span>${c.personalized_sessions_completed} / ${c.personalized_sessions_total}</span>
+          <button type="button" data-action="inc" data-id="${c.id}">+</button>
+        </div>`;
+    } else if (c.class_track === "oaks" || c.class_track === "explorer") {
+      progressHtml = `<span style="font-size:12px;color:var(--ink-soft);">marked per class session ↓</span>`;
+    } else {
+      progressHtml = `<span style="font-size:12px;color:var(--ink-soft);">—</span>`;
+    }
+
+    tr.innerHTML = `
+      <td><b>${escapeHtml(c.name)}</b></td>
+      <td>${escapeHtml(c.contact_name || "")}</td>
+      <td><select class="student-track-select" data-id="${c.id}">${trackOptions}</select></td>
+      <td><input type="date" class="student-dob-input" data-id="${c.id}" value="${c.date_of_birth || ""}"></td>
+      <td>${progressHtml}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll(".student-track-select").forEach((sel) => {
+    sel.addEventListener("change", async () => {
+      await api(`/api/children/${sel.dataset.id}`, { method: "PUT", body: { class_track: sel.value || null } });
+      await renderStudents();
+    });
+  });
+  tbody.querySelectorAll(".student-dob-input").forEach((inp) => {
+    inp.addEventListener("change", async () => {
+      await api(`/api/children/${inp.dataset.id}`, { method: "PUT", body: { date_of_birth: inp.value || null } });
+      await renderStudents();
+    });
+  });
+  tbody.querySelectorAll('[data-action="inc"], [data-action="dec"]').forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const delta = btn.dataset.action === "inc" ? 1 : -1;
+      await api(`/api/children/${btn.dataset.id}/personalized-session`, { method: "POST", body: { delta } });
+      await renderStudents();
+    });
+  });
+}
+
+function renderSessionColumn(track) {
+  const listEl = document.getElementById(`sessions-${track}`);
+  const sessions = track === "oaks" ? state.oaksSessions : state.explorerSessions;
+  listEl.innerHTML = "";
+  if (!sessions || sessions.length === 0) {
+    listEl.innerHTML = `<div class="due-empty">No sessions scheduled yet.</div>`;
+    return;
+  }
+  sessions.forEach((s) => {
+    const row = document.createElement("div");
+    row.className = "session-row";
+    const timeText = s.session_time ? ` · ${s.session_time}` : "";
+    row.innerHTML = `<span>${fmtDate(s.session_date)}${timeText}</span><span style="color:var(--ink-soft);font-size:12px;">${escapeHtml(s.notes || "")}</span>`;
+    row.addEventListener("click", () => openRosterModal(s.id));
+    listEl.appendChild(row);
+  });
+}
+
+document.querySelectorAll('#sessions-section [data-action="add"]').forEach((btn) => {
+  btn.addEventListener("click", () => openSessionFormModal(btn.dataset.track, "add"));
+});
+
+document.querySelectorAll('#sessions-section [data-action="generate"]').forEach((btn) => {
+  btn.addEventListener("click", () => openSessionFormModal(btn.dataset.track, "generate"));
+});
+
+function openSessionFormModal(track, mode) {
+  const modal = document.getElementById("session-modal");
+  const isGenerate = mode === "generate";
+  modal.innerHTML = `
+    <h2>${isGenerate ? `Generate a 12-week ${TRACK_LABELS[track]} cycle` : `New ${TRACK_LABELS[track]} session`}</h2>
+    ${isGenerate ? `<p style="font-size:12px;color:var(--ink-soft);margin-top:-8px;">Creates 12 weekly sessions, one every 7 days starting from the date below.</p>` : ""}
+    <div class="form-row">
+      <label>${isGenerate ? "First session date" : "Date"}</label>
+      <input type="date" id="f-session-date">
+    </div>
+    <div class="form-row">
+      <label>Time — optional${isGenerate ? " (used for every session)" : ""}</label>
+      <input type="text" id="f-session-time" placeholder="e.g. 4:00 PM">
+    </div>
+    <div class="modal-actions">
+      <div></div>
+      <div class="modal-actions-right">
+        <button class="btn" id="cancel-session-form-btn" type="button">Cancel</button>
+        <button class="btn btn-primary" id="save-session-form-btn" type="button">${isGenerate ? "Generate" : "Save"}</button>
+      </div>
+    </div>
+  `;
+  modal.querySelector("#cancel-session-form-btn").addEventListener("click", closeSessionModal);
+  modal.querySelector("#save-session-form-btn").addEventListener("click", async () => {
+    const sessionDate = document.getElementById("f-session-date").value;
+    const sessionTime = document.getElementById("f-session-time").value || null;
+    if (!sessionDate) {
+      document.getElementById("f-session-date").style.borderColor = "var(--danger)";
+      return;
+    }
+    if (isGenerate) {
+      await api("/api/class-sessions/generate", { method: "POST", body: { class_track: track, start_date: sessionDate, session_time: sessionTime } });
+    } else {
+      await api("/api/class-sessions", { method: "POST", body: { class_track: track, session_date: sessionDate, session_time: sessionTime } });
+    }
+    state[track === "oaks" ? "oaksSessions" : "explorerSessions"] = await api(`/api/class-sessions?track=${track}`);
+    renderSessionColumn(track);
+    closeSessionModal();
+  });
+  document.getElementById("session-modal-backdrop").hidden = false;
+}
+
+async function openRosterModal(sessionId) {
+  const data = await api(`/api/class-sessions/${sessionId}/roster`);
+  const modal = document.getElementById("session-modal");
+  const timeText = data.session.session_time ? ` · ${data.session.session_time}` : "";
+  modal.innerHTML = `
+    <h2>${TRACK_LABELS[data.session.class_track]} — ${fmtDate(data.session.session_date)}${timeText}</h2>
+    <p style="font-size:12px;color:var(--ink-soft);margin-top:-8px;">${escapeHtml(data.session.notes || "")}</p>
+    <div id="roster-list"></div>
+    <div class="modal-actions">
+      <div></div>
+      <div class="modal-actions-right">
+        <button class="btn" id="close-roster-btn" type="button">Close</button>
+      </div>
+    </div>
+  `;
+  const listEl = modal.querySelector("#roster-list");
+  if (data.roster.length === 0) {
+    listEl.innerHTML = `<div class="due-empty">No students assigned to this track yet.</div>`;
+  }
+  data.roster.forEach((c) => {
+    const row = document.createElement("div");
+    row.className = "roster-row";
+    row.innerHTML = `
+      <span>${escapeHtml(c.name)} <span style="color:var(--ink-soft);font-size:12px;">(${escapeHtml(c.contact_name || "")})</span></span>
+      <span class="roster-actions">
+        <button type="button" data-status="present" class="${c.attendance_status === "present" ? "active-present" : ""}">Present</button>
+        <button type="button" data-status="absent" class="${c.attendance_status === "absent" ? "active-absent" : ""}">Absent</button>
+      </span>
+    `;
+    row.querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        await api(`/api/class-sessions/${sessionId}/attendance`, {
+          method: "POST",
+          body: { attendance: [{ child_id: c.id, status: btn.dataset.status }] },
+        });
+        openRosterModal(sessionId);
+      });
+    });
+    listEl.appendChild(row);
+  });
+  modal.querySelector("#close-roster-btn").addEventListener("click", closeSessionModal);
+  document.getElementById("session-modal-backdrop").hidden = false;
+}
+
+function closeSessionModal() {
+  document.getElementById("session-modal-backdrop").hidden = true;
+}
+
+document.getElementById("session-modal-backdrop").addEventListener("click", (e) => {
+  if (e.target.id === "session-modal-backdrop") closeSessionModal();
 });
 
 // ----------------------------------------------------------------- Hash ----
