@@ -1,0 +1,2 @@
+# No packages needed: the app uses only Python's standard library.
+# (This file tells the host it is a Python app.)

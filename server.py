@@ -27,9 +27,10 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 DATA_DIR = os.environ.get("CRM_DATA_DIR", BASE_DIR)
 DB_PATH = os.path.join(DATA_DIR, "raising_arrows.db")
 PORT = int(os.environ.get("PORT", "8420"))
-# Render (and most PaaS hosts) terminate HTTPS in front of the app and set
-# this env var — use it to mark the session cookie Secure in that case.
-IS_HOSTED = bool(os.environ.get("RENDER"))
+# Render/Railway (and most PaaS hosts) terminate HTTPS in front of the app
+# and set one of these env vars — use it to mark the session cookie Secure
+# in that case.
+IS_HOSTED = bool(os.environ.get("RENDER") or os.environ.get("RAILWAY_ENVIRONMENT"))
 
 STAGES = [
     {"key": "new_inquiry", "label": "New Inquiry"},
