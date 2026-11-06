@@ -492,9 +492,7 @@ class Handler(BaseHTTPRequestHandler):
         with _db_lock:
             conn = get_db()
             try:
-                if path == "/api/admin/one-time-reset":
-                    self._handle_one_time_reset(conn, body)
-                elif path == "/api/setup":
+                if path == "/api/setup":
                     self._handle_setup(conn, body)
                 elif path == "/api/login":
                     self._handle_login(conn, body)
@@ -597,24 +595,6 @@ class Handler(BaseHTTPRequestHandler):
                 conn.close()
 
     # -- handlers -----------------------------------------------------------
-
-    def _handle_one_time_reset(self, conn, body):
-        # TEMPORARY: wipes all data so first-time setup can run again with a
-        # fresh login. Remove this endpoint once used. The expected token is
-        # read from an env var set directly in the host's dashboard — never
-        # committed to source control.
-        expected = os.environ.get("ONE_TIME_RESET_TOKEN")
-        if not expected or body.get("token") != expected:
-            self._send_json({"error": "forbidden"}, 403)
-            return
-        conn.executescript(
-            "DELETE FROM contacts; DELETE FROM children; DELETE FROM class_sessions; "
-            "DELETE FROM attendance; DELETE FROM sessions; DELETE FROM settings;"
-        )
-        for k, v in DEFAULT_SETTINGS.items():
-            conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
-        conn.commit()
-        self._send_json({"ok": True})
 
     def _handle_setup(self, conn, body):
         if is_configured(conn):
