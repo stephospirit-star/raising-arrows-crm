@@ -480,6 +480,9 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     session_id = int(path.split("/")[3])
                     self._handle_session_roster(conn, session_id)
+                elif path == "/api/admin/export-db":
+                    token = parse_qs(parsed.query).get("token", [None])[0]
+                    self._handle_export_db(token)
                 else:
                     self._static_file(path)
             finally:
@@ -488,6 +491,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if path == "/api/admin/import-db":
+            # Binary upload, not JSON — read the raw body directly instead
+            # of going through _read_json (which would try to parse it as
+            # JSON and discard it).
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw_body = self.rfile.read(length) if length else b""
+            token = self.headers.get("X-Import-Token")
+            with _db_lock:
+                self._handle_import_db(token, raw_body)
+            return
         body = self._read_json()
         with _db_lock:
             conn = get_db()
@@ -595,6 +608,58 @@ class Handler(BaseHTTPRequestHandler):
                 conn.close()
 
     # -- handlers -----------------------------------------------------------
+
+    def _handle_export_db(self, token):
+        # TEMPORARY: one-off migration helper, gated by an env var token
+        # that only exists in this host's own dashboard. Remove once used.
+        expected = os.environ.get("EXPORT_DB_TOKEN")
+        if not expected or token != expected:
+            self._send_json({"error": "forbidden"}, 403)
+            return
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            src = sqlite3.connect(DB_PATH)
+            dest = sqlite3.connect(tmp_path)
+            src.backup(dest)  # consistent snapshot even with concurrent readers
+            dest.close()
+            src.close()
+            with open(tmp_path, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", 'attachment; filename="export.db"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        finally:
+            os.remove(tmp_path)
+
+    def _handle_import_db(self, token, raw_body):
+        # TEMPORARY: one-off migration helper, gated by an env var token
+        # that only exists in this host's own dashboard. Remove once used.
+        expected = os.environ.get("IMPORT_DB_TOKEN")
+        if not expected or token != expected:
+            self._send_json({"error": "forbidden"}, 403)
+            return
+        if not raw_body.startswith(b"SQLite format 3\x00"):
+            self._send_json({"error": "not a valid sqlite file"}, 400)
+            return
+        tmp_path = DB_PATH + ".incoming"
+        with open(tmp_path, "wb") as f:
+            f.write(raw_body)
+        # Sanity-check it opens and has the contacts table before swapping in.
+        try:
+            check = sqlite3.connect(tmp_path)
+            check.execute("SELECT COUNT(*) FROM contacts")
+            check.close()
+        except Exception as e:
+            os.remove(tmp_path)
+            self._send_json({"error": f"invalid database: {e}"}, 400)
+            return
+        os.replace(tmp_path, DB_PATH)
+        self._send_json({"ok": True, "bytes_written": len(raw_body)})
 
     def _handle_setup(self, conn, body):
         if is_configured(conn):
