@@ -173,6 +173,21 @@
         <button class="btn btn-primary" id="save-settings-btn">Save settings</button>
         <p class="auth-error" id="settings-msg"></p>
       </div>
+
+      <div class="settings-card">
+        <h3>Logins</h3>
+        <p style="font-size:12px;color:var(--ink-soft);margin-top:-6px;">
+          Everyone listed here shares the exact same data — there's no
+          separate view per person, just a separate email + password to
+          sign in with.
+        </p>
+        <div id="users-list"></div>
+        <div class="section-title">Add a login</div>
+        <label>Login (email) <input type="text" id="new-user-email" placeholder="name@example.com"></label>
+        <label>Password <input type="password" id="new-user-password" placeholder="Choose a password"></label>
+        <button class="btn btn-primary" id="add-user-btn">Add login</button>
+        <p class="auth-error" id="users-msg"></p>
+      </div>
     </section>
   </main>
 </div>

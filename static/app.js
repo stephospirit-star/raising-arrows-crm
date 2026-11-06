@@ -774,7 +774,52 @@ function renderSettings() {
   document.getElementById("s-payment-window").value = state.settings.payment_due_window_days || 2;
   document.getElementById("s-installments").value = state.settings.installments_total_default || 3;
   document.getElementById("s-installment-gap").value = state.settings.installment_gap_days || 30;
+  renderUsers();
 }
+
+async function renderUsers() {
+  const users = await api("/api/users");
+  const listEl = document.getElementById("users-list");
+  listEl.innerHTML = "";
+  users.forEach((u) => {
+    const row = document.createElement("div");
+    row.className = "due-list-item";
+    row.innerHTML = `
+      <span>${escapeHtml(u.email)}</span>
+      <span>${users.length > 1 ? `<button class="btn btn-small btn-danger" type="button" data-remove-user="${u.id}">Remove</button>` : `<span style="font-size:12px;color:var(--ink-soft);">only login</span>`}</span>
+    `;
+    listEl.appendChild(row);
+  });
+  listEl.querySelectorAll("[data-remove-user]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/api/users/${btn.dataset.removeUser}`, { method: "DELETE" });
+        await renderUsers();
+      } catch (e) {
+        alert(e.message);
+      }
+    });
+  });
+}
+
+document.getElementById("add-user-btn").addEventListener("click", async () => {
+  const email = document.getElementById("new-user-email").value.trim();
+  const password = document.getElementById("new-user-password").value;
+  const msgEl = document.getElementById("users-msg");
+  msgEl.textContent = "";
+  try {
+    await api("/api/users", { method: "POST", body: { email, password } });
+    document.getElementById("new-user-email").value = "";
+    document.getElementById("new-user-password").value = "";
+    msgEl.style.color = "var(--ok)";
+    msgEl.textContent = "Login added.";
+    await renderUsers();
+    setTimeout(() => (msgEl.textContent = ""), 2000);
+  } catch (e) {
+    msgEl.style.color = "var(--danger)";
+    msgEl.textContent = e.message;
+  }
+});
 
 document.getElementById("save-settings-btn").addEventListener("click", async () => {
   const body = {

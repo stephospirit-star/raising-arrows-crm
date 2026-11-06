@@ -107,8 +107,17 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS sessions (
             token TEXT PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
             created_at TEXT,
             expires_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            salt TEXT NOT NULL,
+            hash TEXT NOT NULL,
+            created_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS contacts (
@@ -188,6 +197,23 @@ def init_db():
         conn.execute("ALTER TABLE children ADD COLUMN recurring_time TEXT")
     if "personalized_sessions_completed" not in existing_child_cols:
         conn.execute("ALTER TABLE children ADD COLUMN personalized_sessions_completed INTEGER NOT NULL DEFAULT 0")
+    existing_session_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if "user_id" not in existing_session_cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+
+    # One-time migration: move the original single shared login (stored as
+    # plain settings rows) into the new multi-login users table, so the
+    # existing password keeps working without anyone re-doing setup.
+    user_count = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    if user_count == 0:
+        legacy = get_settings(conn)
+        if legacy.get("auth_email") and legacy.get("auth_salt") and legacy.get("auth_hash"):
+            conn.execute(
+                "INSERT INTO users (email, salt, hash, created_at) VALUES (?, ?, ?, ?)",
+                (legacy["auth_email"], legacy["auth_salt"], legacy["auth_hash"], datetime.utcnow().isoformat()),
+            )
+            conn.execute("DELETE FROM settings WHERE key IN ('auth_email', 'auth_salt', 'auth_hash')")
+
     conn.commit()
     conn.close()
 
@@ -215,17 +241,16 @@ def verify_password(password, salt, expected_hash):
 
 
 def is_configured(conn):
-    s = get_settings(conn)
-    return bool(s.get("auth_email") and s.get("auth_salt") and s.get("auth_hash"))
+    return conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"] > 0
 
 
-def create_session(conn):
+def create_session(conn, user_id):
     token = secrets.token_hex(32)
     now = datetime.utcnow()
     expires = now + timedelta(days=SESSION_MAX_AGE_DAYS)
     conn.execute(
-        "INSERT INTO sessions (token, created_at, expires_at) VALUES (?, ?, ?)",
-        (token, now.isoformat(), expires.isoformat()),
+        "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        (token, user_id, now.isoformat(), expires.isoformat()),
     )
     conn.commit()
     return token
@@ -240,6 +265,22 @@ def session_valid(conn, token):
     if not row:
         return False
     return datetime.fromisoformat(row["expires_at"]) > datetime.utcnow()
+
+
+def session_user(conn, token):
+    """The logged-in user's {id, email} for this session token, or None."""
+    if not token:
+        return None
+    row = conn.execute(
+        """SELECT u.id, u.email, s.expires_at FROM sessions s
+           JOIN users u ON u.id = s.user_id WHERE s.token = ?""",
+        (token,),
+    ).fetchone()
+    if not row:
+        return None
+    if datetime.fromisoformat(row["expires_at"]) <= datetime.utcnow():
+        return None
+    return {"id": row["id"], "email": row["email"]}
 
 
 # ---------------------------------------------------------------------------
@@ -413,23 +454,26 @@ class Handler(BaseHTTPRequestHandler):
             conn = get_db()
             try:
                 if path == "/api/setup-status":
-                    configured = is_configured(conn)
-                    email = get_settings(conn).get("auth_email") if configured else None
-                    self._send_json({"configured": configured, "email": email})
+                    self._send_json({"configured": is_configured(conn)})
                 elif path == "/api/me":
+                    user = session_user(conn, self._get_cookie_token())
+                    if not user:
+                        self._send_json({"error": "unauthorized"}, 401)
+                        return
+                    self._send_json({"email": user["email"]})
+                elif path == "/api/users":
                     if not self._require_auth(conn):
                         return
-                    email = get_settings(conn).get("auth_email")
-                    self._send_json({"email": email})
+                    rows = conn.execute(
+                        "SELECT id, email, created_at FROM users ORDER BY created_at"
+                    ).fetchall()
+                    self._send_json([dict(r) for r in rows])
                 elif path == "/api/stages":
                     self._send_json({"stages": STAGES})
                 elif path == "/api/settings":
                     if not self._require_auth(conn):
                         return
-                    s = get_settings(conn)
-                    s.pop("auth_salt", None)
-                    s.pop("auth_hash", None)
-                    self._send_json(s)
+                    self._send_json(get_settings(conn))
                 elif path == "/api/contacts":
                     if not self._require_auth(conn):
                         return
@@ -498,6 +542,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._handle_login(conn, body)
                 elif path == "/api/logout":
                     self._handle_logout(conn)
+                elif path == "/api/users":
+                    if not self._require_auth(conn):
+                        return
+                    self._handle_add_user(conn, body)
                 elif path == "/api/contacts":
                     if not self._require_auth(conn):
                         return
@@ -589,6 +637,17 @@ class Handler(BaseHTTPRequestHandler):
                     conn.execute("DELETE FROM class_sessions WHERE id = ?", (session_id,))
                     conn.commit()
                     self._send_json({"ok": True})
+                elif len(parts) == 4 and path.startswith("/api/users/"):
+                    if not self._require_auth(conn):
+                        return
+                    user_count = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+                    if user_count <= 1:
+                        self._send_json({"error": "can't remove the last remaining login"}, 400)
+                        return
+                    user_id = int(parts[3])
+                    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+                    conn.commit()
+                    self._send_json({"ok": True})
                 else:
                     self._send_json({"error": "not found"}, 404)
             finally:
@@ -606,41 +665,48 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "email and a password (4+ chars) are required"}, 400)
             return
         salt, digest = hash_password(password)
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('auth_email', ?)",
-            (email,),
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('auth_salt', ?)",
-            (salt,),
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('auth_hash', ?)",
-            (digest,),
+        cur = conn.execute(
+            "INSERT INTO users (email, salt, hash, created_at) VALUES (?, ?, ?, ?)",
+            (email, salt, digest, datetime.utcnow().isoformat()),
         )
         conn.commit()
-        token = create_session(conn)
+        token = create_session(conn, cur.lastrowid)
         self._send_json(
             {"ok": True, "email": email},
             set_cookie=session_cookie_header(token),
         )
 
     def _handle_login(self, conn, body):
-        s = get_settings(conn)
         email = (body.get("email") or "").strip().lower()
         password = body.get("password") or ""
-        if (
-            not s.get("auth_email")
-            or email != s.get("auth_email")
-            or not verify_password(password, s.get("auth_salt", ""), s.get("auth_hash", ""))
-        ):
+        row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        if not row or not verify_password(password, row["salt"], row["hash"]):
             self._send_json({"error": "invalid email or password"}, 401)
             return
-        token = create_session(conn)
+        token = create_session(conn, row["id"])
         self._send_json(
             {"ok": True, "email": email},
             set_cookie=session_cookie_header(token),
         )
+
+    def _handle_add_user(self, conn, body):
+        email = (body.get("email") or "").strip().lower()
+        password = body.get("password") or ""
+        if not email or len(password) < 4:
+            self._send_json({"error": "email and a password (4+ chars) are required"}, 400)
+            return
+        existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+        if existing:
+            self._send_json({"error": "that login already exists"}, 400)
+            return
+        salt, digest = hash_password(password)
+        conn.execute(
+            "INSERT INTO users (email, salt, hash, created_at) VALUES (?, ?, ?, ?)",
+            (email, salt, digest, datetime.utcnow().isoformat()),
+        )
+        conn.commit()
+        rows = conn.execute("SELECT id, email, created_at FROM users ORDER BY created_at").fetchall()
+        self._send_json([dict(r) for r in rows], 201)
 
     def _handle_logout(self, conn):
         token = self._get_cookie_token()
@@ -1042,10 +1108,7 @@ class Handler(BaseHTTPRequestHandler):
                     (k, str(v)),
                 )
         conn.commit()
-        s = get_settings(conn)
-        s.pop("auth_salt", None)
-        s.pop("auth_hash", None)
-        self._send_json(s)
+        self._send_json(get_settings(conn))
 
     def _handle_dashboard(self, conn):
         settings = get_settings(conn)
